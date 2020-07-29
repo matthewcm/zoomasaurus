@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8">
+		<title></title>
+		<script src="https://unpkg.com/peerjs@1.3.1/dist/peerjs.min.js"></script>
+		<style>
+* {
+	color: #FFCC00;
+}
+				body {
+					background: black;
+					font-size: 2em;
+					font-weight: 700;
+					text-align: center;
+				}
+				h1 {
+					margin-bottom: 0.2em;
+					margin-top: 0.2em;
+				}
+				.App {
+					display:flex;
+					height: 100%;
+					min-height: 100vh;
+				}
+
+				.Chat {
+					width: 50%;
+					padding: 1em;
+					box-sizing: border-box;
+					background: #252525;
+
+				}
+				.Chat input {
+					background: black;
+					height: 2em;
+				}
+				.Chat Button{
+					background: black;
+					height: 2.5em;
+				}
+
+				.Zoom {
+					width: 50%;
+					text-align: center;
+					background: #282828;
+				}
+				#video-grid {
+					display: flex;
+					flex-direction:column;
+					width: 100%;
+						justify-content:center;
+							align-items:center;
+
+						height: auto;
+				}
+				.Video {
+					margin: 0.5em;
+				}
+				video {
+					width: 20em;
+					height: 100%;
+					object-fit:cover;
+					margin: 0.5em;
+				}
+
+		</style>
+	</head>
+	<body>
+		<h1>Zoomasaurus</h1>
+		<div class='App'>
+			<div class='Chat'>
+				<h3 id="registered-user"> Not Logged in. </h3>
+
+				<div id="register-form"> 
+					<input type="text" id="register" placeholder="Register with your name: " />
+					<button onclick="register()">Register</button>
+				</div>
+
+
+				<input type="text" id="input" placeholder="Type your message: "/>
+				<button onclick="send()"> Send</button>
+
+				<div> <h3>Online Users</h3>
+					<ul id="online-users">
+					</ul>
+					<h3>Messages</h3>
+					<div id="messages"> 
+					</div>
+				</div>
+
+			</div>
+			<div class="Zoom">
+				<h3>Zoom</h3>
+				<div id="video-grid">
+				</div> 
+			</div>
+
+		</div>
+
+
+		<script>
+			let myPeer;
+			const peers = {}
+			let peerStream;
+				const videoGrid = document.getElementById('video-grid')
+
+			let ws = new WebSocket('ws://localhost:8080');
+			ws.addEventListener('message', function(event){
+				try {
+					const data = JSON.parse(event.data)
+					if (data.type === 'registered'){
+						registered()
+					}
+					if (data.type === 'message'){
+						console.log(data.message)
+						addMessage(data.message)
+					}
+					if (data.type === 'join'){
+						addUser(data.message.name)
+					}
+					if (data.type === 'peer-join'){
+						connectToNewUser(data.message)
+					}
+					if (data.type === 'online'){
+						data.message.users.forEach(userName => {
+							addUser(userName)
+						})
+					}
+					if (data.type === 'left'){
+						removeUser(data.message.name)
+					}
+				}catch (e) {
+					return false
+				}
+			})
+
+
+
+			async function connectToNewUser({name, id}){
+				console.log('Connect to new user')
+
+				const call = myPeer.call(id, peerStream)
+				const video = document.createElement('video')
+
+				call.on('stream', userVideoStream => {
+					addVideoToStream(video, userVideoStream)
+				})
+
+				call.on('close', () => {
+					video.remove()
+				})
+
+				peers[id] = call
+			}
+
+			function addVideoToStream (video, stream) {
+				const  videoContainer = document.createElement('div')
+				videoContainer.className = "Video"
+
+				video.srcObject = stream
+				video.addEventListener('loadedmetadata', () => {
+					video.play()
+				})
+				videoContainer.appendChild(video)
+				videoGrid.append(video)
+			}
+
+
+			function send(){
+				const input = document.getElementById('input')
+				const userName = document.getElementById('registered-user')
+				const data = JSON.stringify({
+					type: 'message',
+					message: {name: userName.innerText, message: input.value}
+				})
+				ws.send(data)
+
+				addMessage({
+					name: 'You',
+					message: input.value
+				})
+
+				input.value = ''
+			}
+			async function register(){
+				const registerInput = document.getElementById('register')
+				const data = JSON.stringify({
+					type: 'register',
+					name: registerInput.value}
+				)
+				ws.send(data)
+
+				myPeer = new Peer(undefined, {
+					host: '/',
+					port: 3001
+				})
+
+				myPeer.on('open', id => {
+					const data = JSON.stringify({
+						type: 'peer-join',
+						message: {name: registerInput.value, id}
+					})
+					ws.send(data)
+				})
+
+				//RECEIVE 
+				const myVideo = document.createElement('video')
+				myVideo.muted = true
+
+				peerStream = await navigator.mediaDevices.getUserMedia({
+					video: true,
+					audio: true
+				})
+
+				// Get video on the screen
+					console.log('MY VIDEO')
+				addVideoToStream(myVideo, peerStream)
+
+				myPeer.on('call', call => {
+					console.log(call)
+					console.log('ANSWERING CALL')
+					call.answer(peerStream)
+
+					const video= document.createElement('video')
+
+					//put their videos on my screen
+					call.on('stream', userVideoStream => {
+					console.log('CONNECTING OTHERS')
+						console.log(call)
+						console.log(userVideoStream)
+						addVideoToStream(video, userVideoStream)
+					})
+
+				})
+
+			}
+			function addUser (name) {
+				const ul = document.getElementById('online-users')
+				const li = document.createElement('li')
+				li.innerText = name;
+				ul.appendChild(li);
+			}
+			function removeUser(name) {
+				console.log('Removing user')
+				const ul = document.getElementById('online-users')
+				const lis = ul.querySelectorAll('li')
+				Array.from(lis).find(li => {
+					if (li.innerText === name){
+						li.remove()
+					}
+				})
+
+			}
+
+			function addMessage({name, message}) {
+				const  messages= document.getElementById('messages')
+				const div = document.createElement('div')
+				const messageEl = document.createElement('span')
+
+				messageEl.innerText  = `${name}: ${message}`
+
+				div.appendChild(messageEl)
+
+				messages.appendChild(div)
+			}
+			function registered() {
+				const registerForm = document.getElementById('register-form')
+				registerForm.style.display = 'none';
+
+
+				const h3 = document.getElementById('registered-user')
+				const userName = document.getElementById('register')
+				h3.innerText = userName.value;
+			}
+
+
+		</script>
+		<div id="message">
+		</div>
+	</body>
+</html>
